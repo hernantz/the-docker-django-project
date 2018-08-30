@@ -1,0 +1,96 @@
+version: '3.7'
+
+services:
+   db:
+     image: postgres:10.5
+     container_name: polls-postgres
+     expose:
+       - "5432"
+     networks:
+       - jaz
+
+   rabbitmq:
+     image: rabbitmq:3.7.7
+     container_name: polls-rabbitmq
+     expose:
+       - "5672"
+     environment:
+       - RABBITMQ_DEFAULT_USER=guest
+       - RABBITMQ_DEFAULT_PASS=guest
+     networks:
+       - jaz
+
+   app:
+     build:
+       args:
+         - SITE_DIR=/site/
+       context: .
+       dockerfile: ./devops/Dockerfile
+     container_name: polls-app
+     command: /app-start.sh
+     volumes:
+       - ./mysite/:/site/
+       - static-volume:/site/static/
+     expose:
+       - "8000"
+     environment:
+       - DATABASE_URL=postgres://postgres@db/postgres
+       - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+       - NUM_PROCS=2
+       - NUM_THREADS=2
+       - SITE_DIR=/site/
+       - PROJECT_NAME=mysite
+       - DJANGO_DEBUG=True
+     depends_on:
+       - db
+       - rabbitmq
+     networks:
+       - jaz
+
+   worker:
+     build:
+       args:
+         - SITE_DIR=/site/
+       context: .
+       dockerfile: ./devops/Dockerfile
+     container_name: polls-worker
+     command: /site/env/bin/celery worker -A polls --workdir /site/ -l info
+     volumes:
+       - .:/site/
+       - static-volume:/site/static/
+     environment:
+       - DATABASE_URL=postgres://postgres@db/postgres
+       - CELERY_BROKER_URL=amqp://guest:guest@rabbitmq:5672//
+       - SITE_DIR=/site/
+       - PROJECT_NAME=mysite
+       - DJANGO_DEBUG=False
+     depends_on:
+       - rabbitmq
+     networks:
+       - jaz
+
+   web:
+     image: nginx:1.15.3
+     container_name: polls-web
+     ports:
+       - "80:80"
+       - "443:443"
+     depends_on:
+       - app
+     volumes:
+       - ./devops/nginx/default.template.conf:/root/default.template.conf
+       - ./devops/ssl/:/site/ssl/
+       - static-volume:/site/static
+     command: /bin/bash -c "envsubst '$$NGINX_HTTP_PORT $$NGINX_HTTPS_PORT' < /root/default.template.conf > /etc/nginx/conf.d/default.conf && nginx -g 'daemon off;'"
+     environment:
+       - NGINX_HOST=foobar.com
+       - NGINX_HTTP_PORT=80
+       - NGINX_HTTPS_PORT=443
+     networks:
+       - jaz
+
+networks:
+  jaz:
+
+volumes:
+  static-volume:
